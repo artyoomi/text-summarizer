@@ -5,7 +5,7 @@ from enum import Enum, auto
 # Method to generate summarization
 class Method(Enum):
     TEXTRANK = auto()
-    NN       = auto()
+    T5       = auto()
 
     @classmethod
     def from_string(cls, value: str):
@@ -23,7 +23,6 @@ class Method(Enum):
 def parse_args():
     argparser = ArgumentParser(description="Inference script for autosummarization model")
     argparser.add_argument('-m', '--method', type=Method.from_string, default=Method.TEXTRANK)
-    argparser.add_argument('-i', '--input', type=str, help="JSON file with list of sentences")
     argparser.add_argument(
         '-d',
         '--from-dataset',

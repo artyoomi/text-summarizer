@@ -1,5 +1,6 @@
 import re
 import nltk
+import datasets
 
 from razdel import sentenize, tokenize
 from logger_config import setup_logger
@@ -9,33 +10,44 @@ logger = setup_logger(__name__)
 
 
 class StopwordsManager:
-    RU_STOPWORDS = None
+    _RU_STOPWORDS = None
 
     @classmethod
     def get_ru_stopwords(cls):
-        PATH = 'corpora/stopwords'
-        if cls.RU_STOPWORDS is None:
+        _PATH = 'corpora/stopwords'
+        if cls._RU_STOPWORDS is None:
             try:
-                nltk.data.find(PATH)
+                nltk.data.find(_PATH)
                 logger.info("Stopwords found in local cache!")
-                cls.RU_STOPWORDS = nltk.corpus.stopwords.words('russian')
+                cls._RU_STOPWORDS = nltk.corpus.stopwords.words('russian')
             except Exception:
                 logger.info("Downloading stopwords...")
                 nltk.download('stopwords', quiet=True)
                 logger.info("Stopwords downloaded!")
 
-            cls.RU_STOPWORDS = nltk.corpus.stopwords.words('russian')
-        return cls.RU_STOPWORDS
+            cls._RU_STOPWORDS = nltk.corpus.stopwords.words('russian')
+        return cls._RU_STOPWORDS
 
 class MorphManager:
-    MORPH = None
+    _MORPH = None
 
     @classmethod
     def get_morth(cls):
-        if cls.MORPH is None:
+        if cls._MORPH is None:
             from pymorphy3 import MorphAnalyzer
-            cls.MORPH = MorphAnalyzer()
-        return cls.MORPH
+            cls._MORPH = MorphAnalyzer()
+        return cls._MORPH
+
+class DatasetManager:
+    DATASET_NAME = 'IlyaGusev/gazeta'
+    _DATASET = None
+
+    @classmethod
+    def get_dataset(cls):
+        if cls._DATASET is None:
+            from datasets import load_dataset
+            cls._DATASET = load_dataset(cls.DATASET_NAME)
+        return cls._DATASET
 
 def to_sentences(text: str):
     return [s.text for s in sentenize(text)]
