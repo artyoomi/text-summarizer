@@ -1,27 +1,18 @@
-import json
 import random
-import logging
 import cli
+import os
 
 from datasets import load_dataset
 from baseline import TextRankSummarizer
 from metrics import compute_rouge
+from logger_config import setup_logger
 
+_DATASET_NAME = "IlyaGusev/gazeta"
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
-
-def load_examples(path: str) -> list[str]:
-    texts: list[str] = []
-    with open(path, 'r') as f_in:
-        texts = json.loads(f_in.read())
-    return texts
-
+logger = setup_logger(__name__)
 
 if __name__ == "__main__":
     args = cli.parse_args()
-
-    ds = load_dataset("IlyaGusev/gazeta")
 
     summarizer = None
     match args.method:
@@ -34,28 +25,41 @@ if __name__ == "__main__":
         refs: list[str] = []
         preds: list[str] = []
 
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        ds = load_dataset(_DATASET_NAME)
+
+        if (args.metrics):
+            references  = []
+            predictions = []
+
         for i in random.sample(range(0, len(ds['train'])), args.from_dataset):
             logger.info(f"Dataset instance no. {i+1}")
             logger.info(f"\n\ttext: {ds['train'][i]['text']}")
             logger.info(f"\n\treference summary: {ds['train'][i]['summary']}")
 
-            pred_list = summarizer.summarize([ds['train'][i]['text']])
-            pred = pred_list[0] if len(pred_list) > 0 else ""
-            logger.info(f"\n\tinferenced summary: {pred}")
+            summary = summarizer.summarize(ds['train'][i]['text'])
+            logger.info(f"\n\tinferenced summary: {summary}")
 
             if args.metrics:
-                refs.append(ds['train'][i]['summary'])
-                preds.append(pred)
+                references.append(ds['train'][i]['summary'])
+                predictions.append(summary)
 
         if args.metrics:
-            # rouge = compute_rouge(preds, refs, limit=300)
-            rouge = compute_rouge(refs, preds, limit=300)
-            logger.info(
-                "\nROUGE (mean over samples)\n"
-                f"\trouge1: P={rouge['rouge1'].precision:.4f} R={rouge['rouge1'].recall:.4f} F1={rouge['rouge1'].f1:.4f}\n"
-                f"\trouge2: P={rouge['rouge2'].precision:.4f} R={rouge['rouge2'].recall:.4f} F1={rouge['rouge2'].f1:.4f}\n"
-                f"\trougeL: P={rouge['rougeL'].precision:.4f} R={rouge['rougeL'].recall:.4f} F1={rouge['rougeL'].f1:.4f}"
-            )
+            rouge = compute_rouge(predictions, references)
+            lines = ["\nROUGE (min / mean / max over samples)"]
+            for name in ("rouge1", "rouge2", "rougeL"):
+                m = rouge[name]
+                lines.append(f"\t{name}:")
+                lines.append(
+                    f"\t  precision: min={m.precision[0]:.4f} mean={m.precision[1]:.4f} max={m.precision[2]:.4f}"
+                )
+                lines.append(
+                    f"\t  recall:    min={m.recall[0]:.4f} mean={m.recall[1]:.4f} max={m.recall[2]:.4f}"
+                )
+                lines.append(
+                    f"\t  f1:        min={m.f1[0]:.4f} mean={m.f1[1]:.4f} max={m.f1[2]:.4f}"
+                )
+            logger.info("\n".join(lines))
 
 
     # summarizer = TextRankSummarizer()

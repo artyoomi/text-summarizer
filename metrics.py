@@ -1,104 +1,90 @@
-import nltk
 import re
+
 from typing import Iterable
+from dataclasses import dataclass, field
+from rouge_score.rouge_scorer import RougeScorer
+from logger_config import setup_logger
+from utils import preprocess
 
-from dataclasses import dataclass
-from razdel import tokenize as razdel_tokenize
-from rouge_score import rouge_scorer
-
-
-_WS_RE = re.compile(r"\s+")
-_PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
-
-# _RU_STOPWORDS = {
-#     "и","в","во","не","что","он","на","я","с","со","как","а","то","все","она","так",
-#     "его","но","да","ты","к","у","же","вы","за","бы","по","ее","мне","было","вот",
-#     "от","меня","еще","нет","о","из","ему","теперь","когда","даже","ну","вдруг",
-#     "ли","если","уже","или","ни","быть","был","него","до","вас","нибудь","опять",
-#     "уж","вам","ведь","там","потом","себя","ничего","ей","может","они","тут",
-#     "где","есть","надо","ней","для","мы","тебя","их","чем","была","сам","чтоб",
-#     "без","будто","чего","раз","тоже","себе","под","будет","ж","тогда","кто",
-#     "этот","того","потому","этого","какой","совсем","ним","здесь","этом","один",
-#     "почти","мой","тем","чтобы","нее","сейчас","были","куда","зачем","всех",
-#     "никогда","можно","при","наконец","два","об","другой","хоть","после","над",
-#     "больше","тот","через","эти","нас","про","всего","них","какая","много",
-#     "разве","три","эту","моя","впрочем","хорошо","свою","этой","перед","иногда",
-#     "лучше","чуть","том","нельзя","такой","им","более","всегда","конечно",
-#     "всю","между"
-# }
-# nltk.download('stopwords')
-# _RU_STOPWORDS = nltk.corpus.stopwords.words('russian')
-
-
-def _normalize_whitespace(s: str) -> str:
-    return _WS_RE.sub(" ", (s or "").strip())
-
-
-def _trim_pred_for_eval(s: str, limit: int = 300) -> str:
-    s = _normalize_whitespace(s)
-    if len(s) <= limit:
-        return s
-    return s[:limit].rstrip()
-
-
-def _prepare_text_for_rouge(text: str, *, is_pred: bool, limit: int = 300) -> str:
-    """Normalize, (optionally) trim prediction, drop punctuation, remove stopwords, tokenize with razdel."""
-    if is_pred:
-        text = _trim_pred_for_eval(text, limit=limit)
-    else:
-        text = _normalize_whitespace(text)
-
-    text = _PUNCT_RE.sub(" ", text.lower())
-    tokens = [t.text for t in razdel_tokenize(text)]
-    # tokens = [t for t in tokens if t and t not in _RU_STOPWORDS]
-    return " ".join(tokens)
+logger = setup_logger(__name__)
 
 
 @dataclass(frozen=True)
-class RougeTriple:
-    precision: float
-    recall: float
-    f1: float
+class RougeMetrics:
+    """
+    Data for each metric type.
+    0: min
+    1: avg
+    2: max
+    """
+    precision: list = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    recall: list    = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    f1: list        = field(default_factory=lambda: [0.0, 0.0, 0.0])
 
 def compute_rouge(
     predictions: Iterable[str],
-    references: Iterable[str],
-    *,
-    limit: int = 300,
-) -> dict[str, RougeTriple]:
-    """
-    Compute mean ROUGE-1/2/L over dataset with RU-specific preprocessing:
-    - predictions trimmed to first `limit` chars
-    - punctuation removed
-    - razdel tokenization
-    - Russian stopwords removed
-    """
-    preds = [_prepare_text_for_rouge(p, is_pred=True, limit=limit) for p in predictions]
-    refs = [_prepare_text_for_rouge(r, is_pred=False, limit=limit) for r in references]
+    references: Iterable[str]
+) -> dict[str, RougeMetrics]:
+    """Compute mean ROUGE-1/2/L over dataset with preprocessing.
 
-    if len(preds) != len(refs):
-        raise ValueError(f"predictions and references must have same length: {len(preds)} != {len(refs)}")
+    :param predictions: predicted abstracts
+    :param references: reference abstracts
+    :return: dictionary with ROUGE metrics
+    """
 
-    scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=False)
-    acc = {
-        "rouge1": [0.0, 0.0, 0.0],
-        "rouge2": [0.0, 0.0, 0.0],
-        "rougeL": [0.0, 0.0, 0.0],
+    predictions_tokens = [preprocess(p) for p in predictions]
+    references_tokens  = [preprocess(r) for r in references]
+
+    if len(predictions_tokens) != len(references_tokens):
+        raise ValueError(f"predictions and references must have same length: {len(predictions_tokens)} != {len(references_tokens)}")
+
+    rouges = ["rouge1", "rouge2", "rougeL"]
+    scorer = RougeScorer(rouges, use_stemmer=False)
+
+    n = len(predictions_tokens)
+    if n == 0:
+        logger.info("Iterable of predictions and references is empty")
+        return {k: RougeMetrics() for k in rouges}
+
+    _inf = float("inf")
+    stats: dict[str, dict[str, float]] = {
+        k: {
+            "p_min": _inf,
+            "p_sum": 0.0,
+            "p_max": float("-inf"),
+            "r_min": _inf,
+            "r_sum": 0.0,
+            "r_max": float("-inf"),
+            "f_min": _inf,
+            "f_sum": 0.0,
+            "f_max": float("-inf"),
+        }
+        for k in rouges
     }
 
-    n = len(preds)
-    if n == 0:
-        return {k: RougeTriple(0.0, 0.0, 0.0) for k in acc}
-
-    for pred, ref in zip(preds, refs, strict=True):
-        scores = scorer.score(ref, pred)
-        for k in acc:
+    for prediction, reference in zip(predictions_tokens, references_tokens, strict=True):
+        scores = scorer.score(reference, prediction)
+        for k in rouges:
             s = scores[k]
-            acc[k][0] += float(s.precision)
-            acc[k][1] += float(s.recall)
-            acc[k][2] += float(s.fmeasure)
+            p = float(s.precision)
+            r = float(s.recall)
+            f = float(s.fmeasure)
+            st = stats[k]
+            st["p_min"] = min(st["p_min"], p)
+            st["p_sum"] += p
+            st["p_max"] = max(st["p_max"], p)
+            st["r_min"] = min(st["r_min"], r)
+            st["r_sum"] += r
+            st["r_max"] = max(st["r_max"], r)
+            st["f_min"] = min(st["f_min"], f)
+            st["f_sum"] += f
+            st["f_max"] = max(st["f_max"], f)
 
     return {
-        k: RougeTriple(acc[k][0] / n, acc[k][1] / n, acc[k][2] / n)
-        for k in acc
+        k: RougeMetrics(
+            precision=[st["p_min"], st["p_sum"] / n, st["p_max"]],
+            recall=[st["r_min"], st["r_sum"] / n, st["r_max"]],
+            f1=[st["f_min"], st["f_sum"] / n, st["f_max"]],
+        )
+        for k, st in stats.items()
     }
